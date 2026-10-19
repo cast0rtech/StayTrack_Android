@@ -57,6 +57,19 @@ android {
     buildFeatures {
         compose = true
     }
+
+    applicationVariants.all {
+        outputs.all {
+            val output = this as? com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            if (output != null) {
+                if (buildType.name == "release") {
+                    output.outputFileName = "StayTrack.apk"
+                } else {
+                    output.outputFileName = "StayTrack-${buildType.name}.apk"
+                }
+            }
+        }
+    }
 }
 
 dependencies {
