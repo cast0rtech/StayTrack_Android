@@ -63,8 +63,10 @@ class MobileMainViewModel : ViewModel() {
 
     fun toggleTracking(context: Context) {
         if (serviceState.value.isRunning) {
+            com.staytrack.mobile.service.TrackingPreferences.setTrackingEnabled(context, false)
             MobileTrackingService.stop(context)
         } else {
+            com.staytrack.mobile.service.TrackingPreferences.setTrackingEnabled(context, true)
             MobileTrackingService.start(context)
         }
     }

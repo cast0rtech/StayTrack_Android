@@ -41,7 +41,9 @@ fun DashboardScreen(
     serviceState: TrackingState,
     allVisits: List<Visit>,
     allPlaces: List<Place>,
-    stats: DashboardStats
+    stats: DashboardStats,
+    showBatteryWarning: Boolean = false,
+    onRequestIgnoreBattery: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val placeMap = remember(allPlaces) { allPlaces.associateBy { it.id } }
@@ -64,6 +66,58 @@ fun DashboardScreen(
         contentPadding = PaddingValues(top = 16.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // Battery Optimization Warning Banner
+        if (showBatteryWarning) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0x33F59E0B)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x88F59E0B))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = Color(0xFFFBBF24),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Ahorro de batería activo",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "Para registrar estancias de forma continua con la pantalla apagada, permite ejecución en segundo plano.",
+                                fontSize = 11.sp,
+                                color = TextSecondary
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = onRequestIgnoreBattery,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFFBBF24),
+                                contentColor = Color.Black
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text("Ajustar", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+
         // Mode Banner
         item {
             Card(
@@ -81,20 +135,20 @@ fun DashboardScreen(
                         modifier = Modifier
                             .size(10.dp)
                             .clip(CircleShape)
-                            .background(if (serviceState.isRunning) NeonCyan else Color.Gray)
+                            .background(if (serviceState.isRunning) NeonCyan else CrimsonRed)
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Column {
                         Text(
-                            text = "STAYTRACK // MÓVIL AUTÓNOMO",
+                            text = if (serviceState.isRunning) "STAYTRACK // RASTREO CONTINUO ACTIVO" else "STAYTRACK // MONITOREO PAUSADO",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace,
-                            color = NeonCyan,
+                            color = if (serviceState.isRunning) NeonCyan else CrimsonRed,
                             letterSpacing = 1.sp
                         )
                         Text(
-                            text = if (serviceState.isRunning) "Registrando estancias continuamente sin reloj" else "Monitoreo en pausa",
+                            text = if (serviceState.isRunning) "Registrando automáticamente dónde has estado y cuánto tiempo" else "Pausado manualmente por el usuario",
                             fontSize = 11.sp,
                             color = TextSecondary
                         )
@@ -293,12 +347,12 @@ fun LiveStatusHeroCard(
                 modifier = Modifier.fillMaxWidth(0.8f)
             ) {
                 Icon(
-                    imageVector = if (serviceState.isRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
+                    imageVector = if (serviceState.isRunning) Icons.Default.Pause else Icons.Default.PlayArrow,
                     contentDescription = null
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = if (serviceState.isRunning) "Detener Monitoreo" else "Iniciar Monitoreo",
+                    text = if (serviceState.isRunning) "Pausar Monitoreo" else "Reanudar Monitoreo",
                     fontWeight = FontWeight.Bold
                 )
             }

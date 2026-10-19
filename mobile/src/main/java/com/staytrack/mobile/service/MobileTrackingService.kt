@@ -57,10 +57,12 @@ class MobileTrackingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP_TRACKING -> {
+                TrackingPreferences.setTrackingEnabled(this, false)
                 stopTracking()
                 stopSelf()
             }
             else -> {
+                TrackingPreferences.setTrackingEnabled(this, true)
                 startTrackingForeground()
             }
         }
@@ -160,6 +162,8 @@ class MobileTrackingService : Service() {
                     activeVisit = currentVisit,
                     stayDurationMinutes = durationMin
                 )
+                val placeName = _serviceState.value.activePlace?.nombre ?: "Estancia"
+                updateNotification("En estancia: $placeName (${formatDuration(durationMin)})")
             }
 
             is StayDetectionResult.EstanciaFinalizada -> {
@@ -172,11 +176,17 @@ class MobileTrackingService : Service() {
                     stayDurationMinutes = 0L
                 )
 
-                updateNotification("En movimiento")
+                updateNotification("En movimiento • Buscando estancias")
             }
 
             else -> {}
         }
+    }
+
+    private fun formatDuration(mins: Long): String {
+        val h = mins / 60
+        val m = mins % 60
+        return if (h > 0) "${h}h ${m}m" else "$m min"
     }
 
     private fun startDurationTicker() {
@@ -191,7 +201,7 @@ class MobileTrackingService : Service() {
                         stayDurationMinutes = durationMin
                     )
                     val placeName = _serviceState.value.activePlace?.nombre ?: "Estancia"
-                    updateNotification("$placeName ($durationMin min)")
+                    updateNotification("En estancia: $placeName (${formatDuration(durationMin)})")
                 }
             }
         }
@@ -211,11 +221,21 @@ class MobileTrackingService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val stopIntent = Intent(this, MobileTrackingService::class.java).apply {
+            action = ACTION_STOP_TRACKING
+        }
+        val stopPendingIntent = PendingIntent.getService(
+            this, 1, stopIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         return NotificationCompat.Builder(this, StayTrackMobileApplication.CHANNEL_ID_TRACKING)
             .setContentTitle(title)
             .setContentText(text)
+            .setSubText("Monitoreo continuo en segundo plano")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setContentIntent(pendingIntent)
+            .addAction(android.R.drawable.ic_media_pause, "Pausar", stopPendingIntent)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
