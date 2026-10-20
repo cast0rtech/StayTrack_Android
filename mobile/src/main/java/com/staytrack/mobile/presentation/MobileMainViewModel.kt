@@ -71,30 +71,47 @@ class MobileMainViewModel : ViewModel() {
         }
     }
 
+    private val _consolidacionMensaje = MutableStateFlow<String?>(null)
+    val consolidacionMensaje: StateFlow<String?> = _consolidacionMensaje.asStateFlow()
+
+    fun limpiarMensajeConsolidacion() {
+        _consolidacionMensaje.value = null
+    }
+
     fun guardarLugar(
         placeId: String,
         nombre: String?,
         categoria: PlaceCategory,
         radio: Double,
         isFavorite: Boolean,
-        nombrePersonalizadoCategoria: String? = null
+        nombrePersonalizadoCategoria: String? = null,
+        latitud: Double? = null,
+        longitud: Double? = null
     ) {
         viewModelScope.launch {
             val existente = db.placeDao().getPlaceById(placeId)
+            val fallbackLat = serviceState.value.lastLatitude
+            val fallbackLon = serviceState.value.lastLongitude
+
             val updated = if (existente != null) {
+                val finalLat = latitud ?: if (existente.latitud != 0.0) existente.latitud else fallbackLat
+                val finalLon = longitud ?: if (existente.longitud != 0.0) existente.longitud else fallbackLon
+
                 existente.copy(
                     nombre = nombre,
                     categoria = categoria,
                     radio = radio,
                     isFavorite = isFavorite,
-                    nombrePersonalizadoCategoria = nombrePersonalizadoCategoria
+                    nombrePersonalizadoCategoria = nombrePersonalizadoCategoria,
+                    latitud = finalLat,
+                    longitud = finalLon
                 )
             } else {
                 Place(
                     id = placeId,
                     nombre = nombre,
-                    latitud = 0.0,
-                    longitud = 0.0,
+                    latitud = latitud ?: fallbackLat,
+                    longitud = longitud ?: fallbackLon,
                     categoria = categoria,
                     radio = radio,
                     isFavorite = isFavorite,
@@ -102,6 +119,15 @@ class MobileMainViewModel : ViewModel() {
                 )
             }
             db.placeDao().upsertPlace(updated)
+        }
+    }
+
+    fun fijarUbicacionLugar(placeId: String, latitud: Double, longitud: Double) {
+        viewModelScope.launch {
+            val existente = db.placeDao().getPlaceById(placeId) ?: return@launch
+            val updated = existente.copy(latitud = latitud, longitud = longitud)
+            db.placeDao().upsertPlace(updated)
+            _consolidacionMensaje.value = "Ubicación fijada en '${existente.nombre ?: "Lugar"}'"
         }
     }
 
@@ -132,7 +158,31 @@ class MobileMainViewModel : ViewModel() {
             val resultado = FavoritesManager.fusionarLugares(origenId, destinoId, lugares, visitas)
 
             db.placeDao().deletePlaceById(origenId)
+            db.placeDao().upsertPlaces(resultado.lugaresActualizados)
             db.visitDao().upsertVisits(resultado.visitasActualizadas)
+            _consolidacionMensaje.value = "Lugares fusionados correctamente (${resultado.visitasReasignadasCount} estancias reasignadas)"
+        }
+    }
+
+    fun consolidarLugaresCercanos(umbralMetros: Double = 120.0) {
+        viewModelScope.launch {
+            val lugares = db.placeDao().getAllPlaces()
+            val visitas = db.visitDao().getAllVisits()
+
+            val resultado = FavoritesManager.consolidarLugaresCercanos(lugares, visitas, umbralMetros)
+            val eliminados = lugares.size - resultado.lugaresActualizados.size
+
+            if (eliminados > 0) {
+                val idsActuales = resultado.lugaresActualizados.map { it.id }.toSet()
+                lugares.filter { it.id !in idsActuales }.forEach {
+                    db.placeDao().deletePlaceById(it.id)
+                }
+                db.placeDao().upsertPlaces(resultado.lugaresActualizados)
+                db.visitDao().upsertVisits(resultado.visitasActualizadas)
+                _consolidacionMensaje.value = "Se consolidaron $eliminados lugares duplicados y ${resultado.visitasReasignadasCount} estancias"
+            } else {
+                _consolidacionMensaje.value = "No se detectaron lugares duplicados cercanos para consolidar"
+            }
         }
     }
 
@@ -143,6 +193,7 @@ class MobileMainViewModel : ViewModel() {
     }
 
     fun eliminarVisita(visitId: String) {
+
         viewModelScope.launch {
             db.visitDao().deleteVisitById(visitId)
         }

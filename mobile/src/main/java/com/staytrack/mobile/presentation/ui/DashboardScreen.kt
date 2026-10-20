@@ -157,6 +157,14 @@ fun DashboardScreen(
             }
         }
 
+        // Tactical Live Map
+        item {
+            TacticalLiveMapCard(
+                serviceState = serviceState,
+                places = allPlaces
+            )
+        }
+
         // Live Hero Card
         item {
             LiveStatusHeroCard(

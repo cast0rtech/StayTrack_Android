@@ -129,4 +129,79 @@ class PlaceAssignerTest {
         assertEquals("casa-id", visitaAsignada.placeId)
         assertEquals("Mi Casa", lugar.nombre)
     }
+
+    @Test
+    fun testFavoritoConToleranciaExtendida() {
+        // Un favorito con radio 100m debería absorber estancias a 130m (p.ej. edificio grande o parking)
+        val trabajo = Place(
+            id = "fav-trabajo",
+            nombre = "Oficina",
+            latitud = latBase,
+            longitud = lonBase,
+            radio = 100.0,
+            isFavorite = true,
+            categoria = PlaceCategory.TRABAJO
+        )
+
+        // Distancia ~120m (0.00108 grados latitud ~ 120m)
+        val latDesviada = latBase + 0.00108
+
+        val resultado = PlaceAssigner.asignarLugar(
+            latitud = latDesviada,
+            longitud = lonBase,
+            lugaresExistentes = listOf(trabajo)
+        )
+
+        assertFalse("El favorito debe capturar la estancia en su zona extendida de atracción", resultado.esNuevo)
+        assertEquals("fav-trabajo", resultado.lugar.id)
+    }
+
+    @Test
+    fun testAgrupacionPorProximidadEvitaLugaresRedundantes() {
+        // Si ya existe un lugar común con radio 75m, y se detecta una estancia a 95m (desviación GPS de 20m),
+        // no debe crearse un lugar nuevo redundante, sino acumularse en el existente
+        val lugarExistente = Place(
+            id = "lugar-existente",
+            nombre = null,
+            latitud = latBase,
+            longitud = lonBase,
+            radio = 75.0,
+            isFavorite = false
+        )
+
+        // Distancia ~95m (0.00085 grados latitud ~ 95m)
+        val latDesviada = latBase + 0.00085
+
+        val resultado = PlaceAssigner.asignarLugar(
+            latitud = latDesviada,
+            longitud = lonBase,
+            lugaresExistentes = listOf(lugarExistente)
+        )
+
+        assertFalse("Debe acumularse en el lugar existente por tolerancia de proximidad en vez de crear otro", resultado.esNuevo)
+        assertEquals("lugar-existente", resultado.lugar.id)
+    }
+
+    @Test
+    fun testIgnoraCoordenadasNoInicializadas() {
+        val lugarSinCoord = Place(
+            id = "invalido",
+            nombre = "Sin GPS",
+            latitud = 0.0,
+            longitud = 0.0,
+            radio = 75.0,
+            isFavorite = true
+        )
+
+        val resultado = PlaceAssigner.asignarLugar(
+            latitud = latBase,
+            longitud = lonBase,
+            lugaresExistentes = listOf(lugarSinCoord)
+        )
+
+        // No debe emparejar contra 0.0, 0.0
+        assertTrue(resultado.esNuevo)
+        assertNotEquals("invalido", resultado.lugar.id)
+    }
 }
+
