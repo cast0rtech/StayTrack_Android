@@ -10,6 +10,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,17 +22,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
 import com.staytrack.core.model.Place
 import com.staytrack.core.model.PlaceCategory
+import com.staytrack.core.model.Visit
 import com.staytrack.mobile.presentation.theme.*
+import com.staytrack.mobile.service.MapProvider
+import com.staytrack.mobile.service.TrackingPreferences
 import com.staytrack.mobile.service.TrackingState
 import java.util.Locale
 
@@ -40,11 +45,27 @@ import java.util.Locale
 fun TacticalLiveMapCard(
     serviceState: TrackingState,
     places: List<Place>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    trajectoryVisits: List<Visit> = emptyList(),
+    selectedLocation: Pair<Double, Double>? = null,
+    titleOverlay: String? = null
 ) {
+    val context = LocalContext.current
     var isExpanded by remember { mutableStateOf(false) }
+    var showMapSettings by remember { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
-    val hasValidLocation = serviceState.lastLatitude != 0.0 || serviceState.lastLongitude != 0.0
+
+    var currentMapProvider by remember { mutableStateOf(TrackingPreferences.getMapProvider(context)) }
+    var currentApiKey by remember { mutableStateOf(TrackingPreferences.getMapApiKey(context)) }
+
+    val hasValidLocation = (serviceState.lastLatitude != 0.0 || serviceState.lastLongitude != 0.0) ||
+            (selectedLocation != null && selectedLocation.first != 0.0) ||
+            trajectoryVisits.isNotEmpty()
+
+    val initialLat = selectedLocation?.first
+        ?: (if (serviceState.lastLatitude != 0.0) serviceState.lastLatitude else trajectoryVisits.firstOrNull()?.latitudAncla ?: 0.0)
+    val initialLon = selectedLocation?.second
+        ?: (if (serviceState.lastLongitude != 0.0) serviceState.lastLongitude else trajectoryVisits.firstOrNull()?.longitudAncla ?: 0.0)
 
     val mapHeight by animateDpAsState(
         targetValue = if (isExpanded) 360.dp else 220.dp,
@@ -65,11 +86,11 @@ fun TacticalLiveMapCard(
                 .height(mapHeight)
         ) {
             if (hasValidLocation) {
-                // Interactive Map View
+                // Interactive Leaflet Map View
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
-                    factory = { context ->
-                        WebView(context).apply {
+                    factory = { ctx ->
+                        WebView(ctx).apply {
                             layoutParams = ViewGroup.LayoutParams(
                                 ViewGroup.LayoutParams.MATCH_PARENT,
                                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -83,7 +104,7 @@ fun TacticalLiveMapCard(
                             }
                             setBackgroundColor(AndroidColor.parseColor("#080B11"))
 
-                            // Evitar que el scroll del LazyColumn intercepte los gestos del mapa
+                            // Evitar que el scroll del LazyColumn intercepte los toques en el mapa
                             setOnTouchListener { v, event ->
                                 when (event.action) {
                                     MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
@@ -97,19 +118,23 @@ fun TacticalLiveMapCard(
                             }
 
                             val placesJson = formatPlacesJson(places)
-                            val anchorLat = serviceState.activeVisit?.latitudAncla ?: serviceState.lastLatitude
-                            val anchorLon = serviceState.activeVisit?.longitudAncla ?: serviceState.lastLongitude
+                            val trajectoryJson = formatTrajectoryJson(trajectoryVisits)
+                            val anchorLat = serviceState.activeVisit?.latitudAncla ?: initialLat
+                            val anchorLon = serviceState.activeVisit?.longitudAncla ?: initialLon
                             val radius = serviceState.activePlace?.radio ?: 75.0
 
                             val html = buildLeafletHtml(
-                                lat = serviceState.lastLatitude,
-                                lon = serviceState.lastLongitude,
+                                lat = initialLat,
+                                lon = initialLon,
                                 accuracy = serviceState.lastAccuracy,
                                 isDwelling = serviceState.isDwelling,
                                 anchorLat = anchorLat,
                                 anchorLon = anchorLon,
                                 radius = radius,
-                                placesJson = placesJson
+                                placesJson = placesJson,
+                                trajectoryJson = trajectoryJson,
+                                provider = currentMapProvider,
+                                apiKey = currentApiKey
                             )
                             loadDataWithBaseURL("https://staytrack.app", html, "text/html", "UTF-8", null)
                             webViewRef = this
@@ -131,6 +156,23 @@ fun TacticalLiveMapCard(
                     }
                 }
 
+                // Centrar en ubicación seleccionada (por ejemplo al tocar una estancia en el historial)
+                LaunchedEffect(selectedLocation) {
+                    selectedLocation?.let { (lat, lon) ->
+                        if (lat != 0.0 || lon != 0.0) {
+                            val js = "if (window.focusLocation) { window.focusLocation($lat, $lon, 16); }"
+                            webViewRef?.evaluateJavascript(js, null)
+                        }
+                    }
+                }
+
+                // Actualizar trayectoria
+                LaunchedEffect(trajectoryVisits) {
+                    val trajJson = formatTrajectoryJson(trajectoryVisits)
+                    val js = "if (window.setTrajectory) { window.setTrajectory($trajJson); }"
+                    webViewRef?.evaluateJavascript(js, null)
+                }
+
                 // Actualizar lugares cuando cambie la lista
                 LaunchedEffect(places) {
                     val placesJson = formatPlacesJson(places)
@@ -147,7 +189,7 @@ fun TacticalLiveMapCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Badge Estado
+                    // Badge Estado / Título
                     Row(
                         modifier = Modifier
                             .clip(RoundedCornerShape(20.dp))
@@ -163,7 +205,7 @@ fun TacticalLiveMapCard(
                                 .background(if (serviceState.isDwelling) NeonCyan else if (serviceState.isRunning) NeonPurple else CrimsonRed)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        val statusText = if (serviceState.isDwelling) {
+                        val statusText = titleOverlay ?: if (serviceState.isDwelling) {
                             "ESTANCIA: ${serviceState.activePlace?.nombre ?: "Otro"}"
                         } else if (serviceState.isRunning) {
                             "EN MOVIMIENTO"
@@ -179,21 +221,39 @@ fun TacticalLiveMapCard(
                         )
                     }
 
-                    // Badge Precisión
-                    if (serviceState.lastAccuracy > 0) {
-                        Box(
+                    // Badge Proveedor de Mapa
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (serviceState.lastAccuracy > 0) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color(0xCC0F172A))
+                                    .border(1.dp, DarkSurfaceBorder, RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = "±${serviceState.lastAccuracy.toInt()}m",
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = NeonCyan,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+
+                        IconButton(
+                            onClick = { showMapSettings = true },
                             modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
+                                .size(30.dp)
+                                .clip(CircleShape)
                                 .background(Color(0xCC0F172A))
-                                .border(1.dp, DarkSurfaceBorder, RoundedCornerShape(12.dp))
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                .border(1.dp, DarkSurfaceBorder, CircleShape)
                         ) {
-                            Text(
-                                text = "±${serviceState.lastAccuracy.toInt()}m",
-                                fontSize = 10.sp,
-                                fontFamily = FontFamily.Monospace,
-                                color = NeonCyan,
-                                fontWeight = FontWeight.SemiBold
+                            Icon(
+                                imageVector = Icons.Default.Layers,
+                                contentDescription = "Cambiar capa de mapa / API Key",
+                                tint = NeonCyan,
+                                modifier = Modifier.size(15.dp)
                             )
                         }
                     }
@@ -216,8 +276,10 @@ fun TacticalLiveMapCard(
                             .border(1.dp, DarkSurfaceBorder, RoundedCornerShape(8.dp))
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
+                        val displayLat = if (serviceState.lastLatitude != 0.0) serviceState.lastLatitude else initialLat
+                        val displayLon = if (serviceState.lastLongitude != 0.0) serviceState.lastLongitude else initialLon
                         Text(
-                            text = "${String.format(Locale.US, "%.4f", serviceState.lastLatitude)}, ${String.format(Locale.US, "%.4f", serviceState.lastLongitude)}",
+                            text = "${String.format(Locale.US, "%.4f", displayLat)}, ${String.format(Locale.US, "%.4f", displayLon)}",
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
                             color = TextSecondary
@@ -267,6 +329,187 @@ fun TacticalLiveMapCard(
             }
         }
     }
+
+    // Diálogo de Selección de Proveedor de Mapa y Clave API
+    if (showMapSettings) {
+        MapSettingsDialog(
+            currentProvider = currentMapProvider,
+            currentApiKey = currentApiKey,
+            onDismiss = { showMapSettings = false },
+            onSave = { newProvider, newKey ->
+                currentMapProvider = newProvider
+                currentApiKey = newKey
+                TrackingPreferences.setMapProvider(context, newProvider)
+                TrackingPreferences.setMapApiKey(context, newKey)
+
+                // Recargar mapa con el nuevo proveedor
+                val placesJson = formatPlacesJson(places)
+                val trajectoryJson = formatTrajectoryJson(trajectoryVisits)
+                val anchorLat = serviceState.activeVisit?.latitudAncla ?: initialLat
+                val anchorLon = serviceState.activeVisit?.longitudAncla ?: initialLon
+                val radius = serviceState.activePlace?.radio ?: 75.0
+
+                val html = buildLeafletHtml(
+                    lat = initialLat,
+                    lon = initialLon,
+                    accuracy = serviceState.lastAccuracy,
+                    isDwelling = serviceState.isDwelling,
+                    anchorLat = anchorLat,
+                    anchorLon = anchorLon,
+                    radius = radius,
+                    placesJson = placesJson,
+                    trajectoryJson = trajectoryJson,
+                    provider = newProvider,
+                    apiKey = newKey
+                )
+                webViewRef?.loadDataWithBaseURL("https://staytrack.app", html, "text/html", "UTF-8", null)
+                showMapSettings = false
+            }
+        )
+    }
+}
+
+@Composable
+fun MapSettingsDialog(
+    currentProvider: MapProvider,
+    currentApiKey: String,
+    onDismiss: () -> Unit,
+    onSave: (MapProvider, String) -> Unit
+) {
+    var selectedProvider by remember { mutableStateOf(currentProvider) }
+    var apiKeyInput by remember { mutableStateOf(currentApiKey) }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, CardGlowBorder, RoundedCornerShape(18.dp)),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = DarkSurfaceElevated)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "CAPA DE MAPA",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = NeonCyan
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(imageVector = Icons.Default.Close, contentDescription = "Cerrar", tint = TextSecondary)
+                    }
+                }
+
+                Text(
+                    text = "Selecciona el estilo de mapa o introduce tu clave API si dispones de ella:",
+                    fontSize = 12.sp,
+                    color = TextSecondary
+                )
+
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MapProvider.entries.forEach { provider ->
+                        val isSelected = provider == selectedProvider
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selectedProvider = provider }
+                                .border(
+                                    width = if (isSelected) 1.5.dp else 0.dp,
+                                    color = if (isSelected) NeonCyan else Color.Transparent,
+                                    shape = RoundedCornerShape(10.dp)
+                                ),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isSelected) DarkSurfaceBorder else DarkSurface
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = isSelected,
+                                    onClick = { selectedProvider = provider },
+                                    colors = RadioButtonDefaults.colors(
+                                        selectedColor = NeonCyan,
+                                        unselectedColor = TextMuted
+                                    )
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = provider.displayName,
+                                        fontSize = 13.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        color = Color.White
+                                    )
+                                    val desc = when (provider) {
+                                        MapProvider.DARK_TACTICAL -> "Libre, sin clave y sin marcas de agua (Recomendado)"
+                                        MapProvider.SATELLITE -> "Imágenes satelitales reales de alta resolución (ESRI)"
+                                        MapProvider.OPEN_STREET_MAP -> "Mapa estándar claro de OpenStreetMap"
+                                        MapProvider.CARTO_CUSTOM -> "Requiere clave de cartocdn.com/basemaps/apikey"
+                                    }
+                                    Text(
+                                        text = desc,
+                                        fontSize = 10.sp,
+                                        color = TextSecondary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (selectedProvider.requiresApiKey) {
+                    OutlinedTextField(
+                        value = apiKeyInput,
+                        onValueChange = { apiKeyInput = it },
+                        label = { Text("Clave API de CartoDB / Mapbox") },
+                        placeholder = { Text("Pega tu api_key aquí") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = NeonCyan,
+                            unfocusedBorderColor = DarkSurfaceBorder,
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text("Cancelar", color = TextSecondary)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = { onSave(selectedProvider, apiKeyInput) },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = NeonCyan,
+                            contentColor = Color.Black
+                        ),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Aplicar", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -280,15 +523,6 @@ private fun GpsSearchingRadar(isRunning: Boolean) {
             repeatMode = RepeatMode.Restart
         ),
         label = "radarPulse"
-    )
-    val rotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(4000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "rotation"
     )
 
     Box(
@@ -386,6 +620,15 @@ private fun formatPlacesJson(places: List<Place>): String {
     return "[${items.joinToString(",")}]"
 }
 
+private fun formatTrajectoryJson(visits: List<Visit>): String {
+    val items = visits.filter { it.latitudAncla != 0.0 || it.longitudAncla != 0.0 }
+        .sortedBy { it.inicio }
+        .map { v ->
+            """{"lat":${v.latitudAncla},"lon":${v.longitudAncla},"start":${v.inicio},"duration":${v.duracionMillis}}"""
+        }
+    return "[${items.joinToString(",")}]"
+}
+
 private fun buildLeafletHtml(
     lat: Double,
     lon: Double,
@@ -394,8 +637,43 @@ private fun buildLeafletHtml(
     anchorLat: Double,
     anchorLon: Double,
     radius: Double,
-    placesJson: String
+    placesJson: String,
+    trajectoryJson: String = "[]",
+    provider: MapProvider = MapProvider.DARK_TACTICAL,
+    apiKey: String = ""
 ): String {
+    // Configurar URL de mosaicos y clases CSS según proveedor
+    val tileUrl: String
+    val tileOptions: String
+    val tileCssFilter: String
+
+    when (provider) {
+        MapProvider.DARK_TACTICAL -> {
+            tileUrl = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+            tileOptions = "{ maxZoom: 19, className: 'tactical-dark-tile' }"
+            tileCssFilter = ".tactical-dark-tile { filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3) brightness(0.7) !important; }"
+        }
+        MapProvider.SATELLITE -> {
+            tileUrl = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+            tileOptions = "{ maxZoom: 19 }"
+            tileCssFilter = ""
+        }
+        MapProvider.OPEN_STREET_MAP -> {
+            tileUrl = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+            tileOptions = "{ maxZoom: 19 }"
+            tileCssFilter = ""
+        }
+        MapProvider.CARTO_CUSTOM -> {
+            tileUrl = if (apiKey.isNotBlank()) {
+                "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?api_key=$apiKey"
+            } else {
+                "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+            }
+            tileOptions = "{ subdomains: 'abcd', maxZoom: 19 }"
+            tileCssFilter = ""
+        }
+    }
+
     return """
 <!DOCTYPE html>
 <html>
@@ -420,6 +698,7 @@ private fun buildLeafletHtml(
         .leaflet-container {
             background-color: #080B11 !important;
         }
+        $tileCssFilter
         .user-dot {
             width: 14px;
             height: 14px;
@@ -456,6 +735,14 @@ private fun buildLeafletHtml(
             box-shadow: 0 2px 8px rgba(0,0,0,0.6);
             border: 1.5px solid rgba(255,255,255,0.8);
         }
+        .trajectory-dot {
+            width: 10px;
+            height: 10px;
+            background: #A855F7;
+            border-radius: 50%;
+            border: 2px solid #FFFFFF;
+            box-shadow: 0 0 6px #A855F7;
+        }
         .leaflet-popup-content-wrapper {
             background: #0F172A !important;
             color: #F8FAFC !important;
@@ -474,6 +761,7 @@ private fun buildLeafletHtml(
     <script>
         var map, userMarker, accuracyCircle, stayCircle;
         var placesLayer = null;
+        var trajectoryLayer = null;
         var currentLat = $lat, currentLon = $lon;
 
         function init() {
@@ -485,12 +773,10 @@ private fun buildLeafletHtml(
                     attributionControl: false
                 });
 
-                L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-                    subdomains: 'abcd',
-                    maxZoom: 19
-                }).addTo(map);
+                L.tileLayer('$tileUrl', $tileOptions).addTo(map);
 
                 placesLayer = L.layerGroup().addTo(map);
+                trajectoryLayer = L.layerGroup().addTo(map);
 
                 var userIcon = L.divIcon({
                     className: '',
@@ -524,6 +810,7 @@ private fun buildLeafletHtml(
                 }
 
                 setPlaces($placesJson);
+                setTrajectory($trajectoryJson);
             } catch (e) {
                 console.error("Error al inicializar mapa", e);
             }
@@ -606,6 +893,47 @@ private fun buildLeafletHtml(
                     placesLayer.addLayer(zoneCircle);
                 }
             });
+        }
+
+        function setTrajectory(trajectoryList) {
+            if (!map || !trajectoryLayer) return;
+            trajectoryLayer.clearLayers();
+            if (!trajectoryList || !Array.isArray(trajectoryList) || trajectoryList.length === 0) return;
+
+            var latlngs = [];
+            trajectoryList.forEach(function(item, idx) {
+                if (item.lat && item.lon) {
+                    var pt = [item.lat, item.lon];
+                    latlngs.push(pt);
+
+                    var dotIcon = L.divIcon({
+                        className: '',
+                        html: '<div class="trajectory-dot"></div>',
+                        iconSize: [10, 10],
+                        iconAnchor: [5, 5]
+                    });
+                    var m = L.marker(pt, { icon: dotIcon });
+                    var mins = Math.round((item.duration || 0) / 60000);
+                    m.bindPopup('<b>Estancia #' + (idx + 1) + '</b><br><span style="color:#94A3B8;font-size:11px">Duración: ' + mins + ' min</span>');
+                    trajectoryLayer.addLayer(m);
+                }
+            });
+
+            if (latlngs.length >= 2) {
+                var polyline = L.polyline(latlngs, {
+                    color: '#00F0FF',
+                    weight: 3,
+                    opacity: 0.7,
+                    dashArray: '8, 8'
+                });
+                trajectoryLayer.addLayer(polyline);
+            }
+        }
+
+        function focusLocation(lat, lon, zoom) {
+            if (map && lat && lon) {
+                map.flyTo([lat, lon], zoom || 16, { animate: true, duration: 0.8 });
+            }
         }
 
         function recenter() {

@@ -27,15 +27,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.compose.material.icons.filled.History
 import com.staytrack.mobile.presentation.theme.*
 import com.staytrack.mobile.presentation.ui.DashboardScreen
 import com.staytrack.mobile.presentation.ui.ExportScreen
+import com.staytrack.mobile.presentation.ui.HistoryScreen
 import com.staytrack.mobile.presentation.ui.PlacesScreen
 import com.staytrack.mobile.service.MobileTrackingService
 import com.staytrack.mobile.service.TrackingPreferences
 
 enum class MobileScreen(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
     DASHBOARD("Dashboard", Icons.Default.Dashboard),
+    HISTORY("Historial", Icons.Default.History),
     PLACES("Lugares", Icons.Default.Place),
     EXPORT("Exportar", Icons.Default.Share)
 }
@@ -151,6 +154,14 @@ class MainActivity : ComponentActivity() {
                                     stats = stats,
                                     showBatteryWarning = isBatteryOptimized,
                                     onRequestIgnoreBattery = { requestIgnoreBatteryOptimization() }
+                                )
+                            }
+                            MobileScreen.HISTORY -> {
+                                HistoryScreen(
+                                    viewModel = viewModel,
+                                    allVisits = allVisits,
+                                    allPlaces = allPlaces,
+                                    serviceState = serviceState
                                 )
                             }
                             MobileScreen.PLACES -> {

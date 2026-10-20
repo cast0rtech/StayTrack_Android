@@ -193,9 +193,32 @@ class MobileMainViewModel : ViewModel() {
     }
 
     fun eliminarVisita(visitId: String) {
-
         viewModelScope.launch {
             db.visitDao().deleteVisitById(visitId)
+            _consolidacionMensaje.value = "Estancia eliminada"
+        }
+    }
+
+    fun reasignarVisitaLugar(visitId: String, nuevoPlaceId: String) {
+        viewModelScope.launch {
+            val visit = db.visitDao().getVisitById(visitId) ?: return@launch
+            val updated = visit.copy(placeId = nuevoPlaceId)
+            db.visitDao().upsertVisit(updated)
+            _consolidacionMensaje.value = "Estancia reasignada"
+        }
+    }
+
+    fun crearFavoritoDesdeVisita(visit: Visit, nombre: String, categoria: PlaceCategory, radio: Double = 75.0) {
+        viewModelScope.launch {
+            val (nuevoLugar, visitaActualizada) = FavoritesManager.crearFavoritoDesdeEstancia(
+                visit = visit,
+                nombre = nombre,
+                categoria = categoria,
+                radio = radio
+            )
+            db.placeDao().upsertPlace(nuevoLugar)
+            db.visitDao().upsertVisit(visitaActualizada)
+            _consolidacionMensaje.value = "Favorito '$nombre' creado y estancia vinculada"
         }
     }
 
